@@ -142,6 +142,8 @@ def get_args_parser():
     parser.add_argument('--enc_giou_loss_coef', default=2, type=float)
     parser.add_argument('--topk_eval', default=100, type=int)
     parser.add_argument('--nms_iou_threshold', default=None, type=float)
+
+    parser.add_argument('--inference', default=False, action='store_true')
     
     return parser
 
@@ -338,9 +340,54 @@ def main(args):
     print('Training time {}'.format(total_time_str))
 
 
+
+def inference(args):
+    device = torch.device(args.device)
+
+    model, _, _ = build_model(args)
+    model.to(device)
+
+    if args.resume:
+        if args.resume.startswith('https'):
+            checkpoint = torch.hub.load_state_dict_from_url(
+                args.resume, map_location='cpu', check_hash=True)
+        else:
+            checkpoint = torch.load(args.resume, map_location='cpu')
+
+        missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model'], strict=False)
+        unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
+        if len(missing_keys) > 0:
+            print('Missing Keys: {}'.format(missing_keys))
+        if len(unexpected_keys) > 0:
+            print('Unexpected Keys: {}'.format(unexpected_keys))
+    model.eval()
+
+    # manually load image and preprocess for inference
+    dataset = datasets.coco.build("val", args)
+
+    img, target = dataset[0]
+    
+    def denormalize(tensor, mean, std):
+        for t, m, s in zip(tensor, mean, std):
+            t.mul_(s).add_(m)
+        return tensor
+    denormalized_img = denormalize(img.clone(), [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) # MS-DETR/datasets/coco.py:make_coco_transforms
+
+    from torchvision.utils import save_image
+    save_image(denormalized_img, "inference_image.png")
+
+    with torch.no_grad():
+        outputs = model(img.unsqueeze(0).to(device))
+
+    print(outputs)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Deformable DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    main(args)
+    if args.inference:
+        inference(args)
+    else:
+        main(args)
