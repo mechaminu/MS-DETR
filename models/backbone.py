@@ -66,7 +66,7 @@ class FrozenBatchNorm2d(torch.nn.Module):
 
 class BackboneBase(nn.Module):
 
-    def __init__(self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool):
+    def __init__(self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool, backbone_name: str):
         super().__init__()
         for name, parameter in backbone.named_parameters():
             if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
@@ -74,12 +74,22 @@ class BackboneBase(nn.Module):
         if return_interm_layers:
             # return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
             return_layers = {"layer2": "0", "layer3": "1", "layer4": "2"}
-            self.strides = [8, 16, 32]
-            self.num_channels = [512, 1024, 2048]
+
+            # resnet 18 and 34 have different channel counts
+            if 'resnet18' in backbone_name or 'resnet34' in backbone_name:
+                self.strides = [8, 16, 32]
+                self.num_channels = [128, 256, 512]
+            else:
+                self.strides = [8, 16, 32]
+                self.num_channels = [512, 1024, 2048]
         else:
             return_layers = {'layer4': "0"}
-            self.strides = [32]
-            self.num_channels = [2048]
+            if 'resnet18' in backbone_name or 'resnet34' in backbone_name:
+                self.strides = [32]
+                self.num_channels = [512]
+            else:
+                self.strides = [32]
+                self.num_channels = [2048]
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
 
     def forward(self, tensor_list: NestedTensor):
@@ -103,8 +113,8 @@ class Backbone(BackboneBase):
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
             pretrained=is_main_process(), norm_layer=norm_layer)
-        assert name not in ('resnet18', 'resnet34'), "number of channels are hard coded"
-        super().__init__(backbone, train_backbone, return_interm_layers)
+        # assert name not in ('resnet18', 'resnet34'), "number of channels are hard coded"
+        super().__init__(backbone, train_backbone, return_interm_layers, name)
         if dilation:
             self.strides[-1] = self.strides[-1] // 2
 
