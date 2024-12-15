@@ -67,18 +67,20 @@ class DeformableDETR(nn.Module):
         elif mixed_selection:
             self.query_embed = nn.Embedding(num_queries, hidden_dim)
         
-        if num_feature_levels > 1:
+
+        # creating projection layer for each feature level (levels from multi-scale deformable attention)
+        if num_feature_levels > 1: # usually 4
             num_backbone_outs = len(backbone.strides)
             input_proj_list = []
             for _ in range(num_backbone_outs):
                 in_channels = backbone.num_channels[_]
                 input_proj_list.append(nn.Sequential(
-                    nn.Conv2d(in_channels, hidden_dim, kernel_size=1),
+                    nn.Conv2d(in_channels, hidden_dim, kernel_size=1), # 1x1 conv
                     nn.GroupNorm(32, hidden_dim),
                 ))
             for _ in range(num_feature_levels - num_backbone_outs):
                 input_proj_list.append(nn.Sequential(
-                    nn.Conv2d(in_channels, hidden_dim, kernel_size=3, stride=2, padding=1),
+                    nn.Conv2d(in_channels, hidden_dim, kernel_size=3, stride=2, padding=1), # 3x3 conv /2
                     nn.GroupNorm(32, hidden_dim),
                 ))
                 in_channels = hidden_dim
@@ -122,7 +124,7 @@ class DeformableDETR(nn.Module):
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
 
-    def forward(self, samples: NestedTensor):
+    def forward(self, samples: NestedTensor, distill: bool = False):
         """The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -139,16 +141,19 @@ class DeformableDETR(nn.Module):
         """
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_tensor_list(samples)
+        
+        # features : Dict[str, NestedTensor] -> intermediate feature from each resnet layer (0:layer2, 1:layer3, 2:layer4)
+        # pos : List[Tensor] -> positional encoding for each feature
         features, pos = self.backbone(samples)
 
         srcs = []
         masks = []
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
-            srcs.append(self.input_proj[l](src))
+            srcs.append(self.input_proj[l](src))    # project the feature from backbone feature extractor to hidden_dim tensor
             masks.append(mask)
             assert mask is not None
-        if self.num_feature_levels > len(srcs):
+        if self.num_feature_levels > len(srcs):     # usually len(srcs) == 3, repeat the last feature level
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
